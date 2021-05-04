@@ -2092,6 +2092,10 @@ class QemuTestingEnv:
         orig: QemuImage = QemuImage.orig(self.vm_dir)
         uefi_without_secboot: pl.Path = self.tmp_dir / "OVMF-without-secboot.fd"
         exec(dry_run=self.dry_run, command=f'cp {orig.uefi} {uefi_without_secboot}')
+        import stat
+        if not self.dry_run:
+            os.chmod(uefi_without_secboot, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH | stat.S_IWUSR | stat.S_IWGRP)
+
         return (tampering, uefi_without_secboot) # Temp image for tampering and copy of initial UEFI image
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -2116,7 +2120,6 @@ def qemu_efistub_run_tests(dry_run: bool, vm_dir: pl.Path) -> None:
 
 
 
-
 def qemu_grub_test_tamper_with_shim(dry_run: bool, disposable: QemuImage, orig_uefi: pl.Path) -> None:
     qemu: Qemu = Qemu(dry_run, disposable)
     assert qemu.start() == BootStatuses.Ok
@@ -2125,6 +2128,11 @@ def qemu_grub_test_tamper_with_shim(dry_run: bool, disposable: QemuImage, orig_u
     qemu.shutdown()
     if not dry_run:
         assert qemu.start() == BootStatuses.UefiFailedToLoadShim
+    # Check that OS failed to boot not because we broke its binaries by writing garbage into them, but
+    # because of signature verification. We do it, by trying to boot the same OS with initial UEFI (without keys):
+    qemu: Qemu = Qemu(dry_run, QemuImage(image=disposable.image, uefi=orig_uefi))
+    if not dry_run:
+        assert qemu.start() == BootStatuses.Ok
 
 def qemu_grub_test_tamper_with_grub(dry_run: bool, disposable: QemuImage, orig_uefi: pl.Path) -> None:
     qemu: Qemu = Qemu(dry_run, disposable)
@@ -2133,6 +2141,11 @@ def qemu_grub_test_tamper_with_grub(dry_run: bool, disposable: QemuImage, orig_u
     qemu.shutdown()
     if not dry_run:
         assert qemu.start() == BootStatuses.ShimFailedToLoadGrub
+    # Check that OS failed to boot not because we broke its binaries by writing garbage into them, but
+    # because of signature verification. We do it, by trying to boot the same OS with initial UEFI (without keys):
+    qemu: Qemu = Qemu(dry_run, QemuImage(image=disposable.image, uefi=orig_uefi))
+    if not dry_run:
+        assert qemu.start() == BootStatuses.Ok
 
 def qemu_grub_test_tamper_with_grub_cfg(dry_run: bool, disposable: QemuImage, orig_uefi: pl.Path) -> None:
     qemu: Qemu = Qemu(dry_run, disposable)

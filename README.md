@@ -777,6 +777,11 @@ qemu.overwrite_middle_of(file=pl.Path("/boot/efi/EFI/BOOT/BOOTX64.EFI"))
 qemu.overwrite_middle_of(file=pl.Path("/boot/efi/EFI/ubuntu/shimx64.efi"))
 qemu.shutdown()
 assert qemu.start() == BootStatuses.UefiFailedToLoadShim
+
+# Check that OS failed to boot not because we broke its binaries by writing garbage into them, but
+# because of signature verification. We do it, by trying to boot the same OS with initial UEFI (without keys):
+qemu: Qemu = Qemu(dry_run, QemuImage(image=disposable.image, uefi=orig_uefi))
+assert qemu.start() == BootStatuses.Ok
 ```
 
 ### Useful QEMU commands
