@@ -903,7 +903,7 @@ class WrappedGpg(metaclass=abc.ABCMeta):
     def __exit__(self, exc_type, exc_value, tb) -> None:
         pass
 
-# Knows about GPG on Yubikey
+# Knows about GPG on FS
 class WrappedFsGpg(WrappedGpg):
     def __init__(self, dry_run: bool, password: t.Union[None, str], GNUPGHOME: pl.Path, key_id: str):
         self.dry_run = dry_run
@@ -911,7 +911,7 @@ class WrappedFsGpg(WrappedGpg):
         self.key_id = key_id
         self.password = password
     def __str__(self) -> str:
-        return f'WrappedYubikeyGpg({self.GNUPGHOME}, KeyId: {self.key_id})'
+        return f'WrappedFsGpg({self.GNUPGHOME}, KeyId: {self.key_id})'
     def __enter__(self) -> Gpg:
         return Gpg(self.dry_run, self.GNUPGHOME, self.key_id, password=self.password)
     def __exit__(self, exc_type, exc_value, tb) -> None:
