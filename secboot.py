@@ -1559,6 +1559,8 @@ def make_new_efistub_boot(dry_run: bool,
         if need_to_repopulate == False:
             return # Everything is fine
 
+        logger.info(f'Got the following from efibootmgr:\n{res.out}')
+
         for entry in boot_entries:
             boot_id: str = entry_regex.match(entry).group('g1')
             logger.info(f'Removing boot: {boot_id}')
