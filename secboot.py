@@ -1515,6 +1515,7 @@ def make_new_efistub_boot(dry_run: bool,
                           boot_dir: pl.Path,
                           disk: str,
                           partition: int,
+                          kernel_parameters: str,
                           uefi: UefiEngine) -> None:
     def create_unified_kernel_from(dry_run: bool, boot_dir: pl.Path, version: KernelVersion, out: pl.Path, uefi: UefiEngine) -> None:
         logger.info(f'Creating unified kernel image from vmlinuz and initrd {version.to_string()} in {boot_dir}')
@@ -1569,7 +1570,7 @@ def make_new_efistub_boot(dry_run: bool,
         # Finally, add our own:
         def add_entry(dry_run: bool, disk: str, partition: int, label: str, efi: pl.Path) -> None:
             logger.info(f'Adding boot entry for "{label}", {efi}')
-            cmd: str = f'efibootmgr --create --disk {disk} --part {partition} --label "{label}" --loader "{efi}"'
+            cmd: str = f'efibootmgr --create --disk {disk} --part {partition} --label "{label}" --loader "{efi}" --unicode "{kernel_parameters}"'
             res: ExecRes = ProgPack('efibootmgr', 'efibootmgr').exec(dry_run, cmd, root_is_required=True)
             if res.is_err():
                 logger.critical(f'Failed to add an entry for "{EfiStubBootResult.PREV_BOOTMGR_ENTRY}" with efi at'
@@ -1651,8 +1652,8 @@ RE_SIGN_FILE_WITH_GPG_EXAMPLE_FS: str        = f'./secboot.py --log-level INFO {
 MAKE_NEW_GRUB_BOOT_EXAMPLE_FS: str           = f'./secboot.py --log-level INFO {MAKE_NEW_GRUB_BOOT_CMD_LINE_OPT} --boot-dir /boot --uefi/engine fs --uefi/keys-dir sec_out/ --gpg/engine fs --gpg/key-id ADDB2... --GNUPGHOME sec_out/gpg --gpg/pass "" --pbkdf-grub-pass-path ~/grub_pbkdf2_pass'
 MAKE_NEW_GRUB_BOOT_EXAMPLE_YUBIKEY: str      = f'./secboot.py --log-level INFO {MAKE_NEW_GRUB_BOOT_CMD_LINE_OPT} --boot-dir /boot --uefi/engine yu --uefi/nfc-reader "HID Global OMNIKEY 5422 Smartcard Reader [OMNIKEY 5422CL" --gpg/engine yu --gpg/pub-key ~/devel/gpg* --pbkdf-grub-pass-path ~/grub_pbkdf2_pass'
 
-MAKE_NEW_EFISTUB_BOOT_EXAMPLE_FS: str        = f'./secboot.py --log-level INFO {MAKE_NEW_EFISTUB_BOOT_CMD_LINE_OPT} --boot-dir /boot --disk /dev/nvme0n1 --partition 1 --uefi/engine fs --uefi/keys-dir sec_out/'
-MAKE_NEW_EFISTUB_BOOT_EXAMPLE_YUBIKEY: str   = f'./secboot.py --log-level INFO {MAKE_NEW_EFISTUB_BOOT_CMD_LINE_OPT} --boot-dir /boot --disk /dev/nvme0n1 --partition 1 --uefi/engine yu --uefi/nfc-reader "HID Global OMNIKEY 5422 Smartcard Reader [OMNIKEY 5422CL"'
+MAKE_NEW_EFISTUB_BOOT_EXAMPLE_FS: str        = f'./secboot.py --log-level INFO {MAKE_NEW_EFISTUB_BOOT_CMD_LINE_OPT} --boot-dir /boot --disk /dev/nvme0n1 --partition 1 --kernel-parameters "BOOT_IMAGE=/vmlinuz-5.11.0-16-generic root=/dev/mapper/vgkubuntu-root ro quiet splash vt.handoff=7 nvidia-drm.modeset=1" --uefi/engine fs --uefi/keys-dir sec_out/'
+MAKE_NEW_EFISTUB_BOOT_EXAMPLE_YUBIKEY: str   = f'./secboot.py --log-level INFO {MAKE_NEW_EFISTUB_BOOT_CMD_LINE_OPT} --boot-dir /boot --disk /dev/nvme0n1 --partition 1 --kernel-parameters "BOOT_IMAGE=/vmlinuz-5.11.0-16-generic root=/dev/mapper/vgkubuntu-root ro quiet splash vt.handoff=7 nvidia-drm.modeset=1" --uefi/engine yu --uefi/nfc-reader "HID Global OMNIKEY 5422 Smartcard Reader [OMNIKEY 5422CL"'
 
 
 QEMU_INITIALISE_EFISTUB_CMD_LINE_OPT: str = "qemu/efistub/initialise"
@@ -2696,6 +2697,9 @@ def main():
     parser_prepare_new_efistub_boot.add_argument('--partition', type=int, required=True,
                                                  help='Partition number. You can check it in the output of'
                                                       '"mount | grep efi". For example: 1')
+    parser_prepare_new_efistub_boot.add_argument('--kernel-parameters', type=str, required=False,
+                                                 help='Kernel args / parameters')
+
     UefiEnginesArgsFactory.add_args(parser_prepare_new_efistub_boot)
 
 
@@ -2846,6 +2850,7 @@ def main():
                                   boot_dir=pl.Path(args.boot_dir).expanduser().resolve(),
                                   disk=args.disk,
                                   partition=args.partition,
+                                  kernel_parameters=args.kernel_parameters,
                                   uefi=UefiEnginesArgsFactory.create_from_args(args, work_dir, creds.piv_pass))
         if args.work_dir:
             work_dir: pl.Path = pl.Path(args.work_dir).expanduser().resolve()
