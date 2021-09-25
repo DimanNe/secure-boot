@@ -1572,6 +1572,7 @@ def make_new_efistub_boot(dry_run: bool,
         # Finally, add our own:
         def add_entry(dry_run: bool, disk: str, partition: int, label: str, efi: pl.Path) -> None:
             logger.info(f'Adding boot entry for "{label}", {efi}')
+            #            efibootmgr --create --disk /dev/nvme0n1 --part 1 --label "SecBoot Previous Linux" --loader "/secboot-linux-prev.efi" --unicode "BOOT_IMAGE=/vmlinuz-5.11.0-16-generic root=/dev/mapper/vgkubuntu-root ro quiet splash vt.handoff=7 nvidia-drm.modeset=1"
             cmd: str = f'efibootmgr --create --disk {disk} --part {partition} --label "{label}" --loader "{efi}" --unicode "{kernel_parameters}"'
             res: ExecRes = ProgPack('efibootmgr', 'efibootmgr').exec(dry_run, cmd, root_is_required=True)
             if res.is_err():
