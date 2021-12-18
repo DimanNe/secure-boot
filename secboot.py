@@ -834,32 +834,57 @@ class Gpg:
         add_sub_key(dry_run, gpg_home, key_id, passphrase, "encrypt")
         add_sub_key(dry_run, gpg_home, key_id, passphrase, "auth")
 
-        print()
-        print("Done")
-        print()
-        print(f'More info is here: https://github.com/drduh/YubiKey-Guide')
-        print(f'Short version:')
-        print(f'wget -O ~/.gnupg/gpg.conf https://raw.githubusercontent.com/drduh/config/master/gpg.conf')
-        print(f'gpg --expert --full-generate-key # Choose (8) RSA choose you own capabilities and Create RSA _Certify_ key')
-        print(f'export KEYID=0xFFFFF...')
-        print(f'gpg --expert --edit-key $KEYID')
-        print(f'   addkey # Add _Signing_ key')
-        print(f'   addkey # Add _Encryption_ key')
-        print(f'   addkey # Add _Authentication_ key')
-        print(f'   save')
-        print()
-        print(f'If you with to move them to a Yubikey:')
-        print(f'gpg --edit-key $KEYID')
-        print(f'   key 1')
-        print(f'   keytocard')
-        print(f'   key 1')
-        print(f'   key 2')
-        print(f'   keytocard')
-        print(f'   key 2')
-        print(f'   key 3')
-        print(f'   keytocard')
-        print(f'   key 3')
-        print(f'   save')
+        print(f"""
+Done
+
+- What have been done:
+  wget -O ~/.gnupg/gpg.conf https://raw.githubusercontent.com/drduh/config/master/gpg.conf
+  gpg --expert --full-generate-key # Choose (8) RSA choose you own capabilities and Create RSA _Certify_ key
+  export KEYID=0xFFFFF...
+  gpg --expert --edit-key $KEYID
+      addkey # Add Signing key
+      addkey # Add Encryption key
+      addkey # Add Authentication key
+      save
+  More info is here: https://github.com/drduh/YubiKey-Guide
+
+
+- Next steps:
+  * Set GPG Home env var:
+    (fish) set -x GNUPGHOME {gpg_home}
+    (bash) export GNUPGHOME={gpg_home}
+
+  * Save (and upload to a keyserver) GPG public key:
+    gpg --armor --export {key_id} | sudo tee /mnt/home/.../gpg-{key_id}.asc
+
+  * Save revocation certificate:
+    sudo cp {gpg_home}/openpgp-revocs.d/{key_id}.rev /mnt/home/.../
+
+  * Move keys to Yubikey:
+    1. Install packages:
+       sudo apt update && sudo apt install cryptsetup opensc scdaemon pcscd yubikey-luks yubikey-manager yubikey-personalization yubikey-personalization-gui libpam-yubico libpam-u2f
+    2. Setup card (default PIN: 123456, default Admin PIN: 12345678):
+       gpg --card-edit
+          admin
+          kdf-setup
+          passwd
+          name
+          login
+          list
+          quit
+    3. Move the private keys to Yubikey:
+       gpg --edit-key {key_id}
+          key 1
+          keytocard
+          key 1
+          key 2
+          keytocard
+          key 2
+          key 3
+          keytocard
+          key 3
+          save
+""")
 
 
 
@@ -2588,7 +2613,7 @@ def main():
     # -----------------------------------------------------------------------------------------------
     parser_generate_gpg_keys = subparsers.add_parser(
         GENERATE_GPG_KEYS_CMD_LINE_OPT,
-        help=f'Generates new GPG keys. Example of usage: "{GENERATE_GPG_KEYS_EXAMPLE}"')
+        help=f'Generates new GPG keys. You might want to create a temporary memory-backed fs for the task: "sudo mount -t tmpfs -o size=10G,uid=(id -u) tmpfs sec_out" and use the directory as temporary GPG HOME. Example of usage: "{GENERATE_GPG_KEYS_EXAMPLE}"')
     parser_generate_gpg_keys.add_argument('--GNUPGHOME', type=str, required=True,
                                           help=f'Path to GPG home directory (usually "~/.gnupg").')
     parser_generate_gpg_keys.add_argument('--id', type=str, required=True,
