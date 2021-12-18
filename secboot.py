@@ -704,11 +704,6 @@ no-symkey-cache
 use-agent
 # Disable recipient key ID in messages
 throw-keyids
-# Default/trusted key ID to use (helpful with throw-keyids)
-#default-key 0xFF3E7D88647EBCDB
-#trusted-key 0xFF3E7D88647EBCDB
-# Group recipient keys (preferred ID last)
-#group keygroup = 0xFF00000000000001 0xFF00000000000002 0xFF3E7D88647EBCDB
 # Keyserver URL
 #keyserver hkps://keys.openpgp.org
 #keyserver hkps://keyserver.ubuntu.com:443
