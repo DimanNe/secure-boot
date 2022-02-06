@@ -863,15 +863,23 @@ Done
   * Move keys to Yubikey:
     1. Install packages:
        sudo apt update && sudo apt install cryptsetup opensc scdaemon pcscd yubikey-luks yubikey-manager yubikey-personalization yubikey-personalization-gui libpam-yubico libpam-u2f
-    2. Setup card (default PIN: 123456, default Admin PIN: 12345678):
+    2. Setup card:
        gpg --card-edit
-          admin
-          kdf-setup
-          passwd
-          name
-          login
-          list
-          quit
+          * admin
+          * kdf-setup
+          * passwd (Default PIN: 123456, new PIN must be >=6 characters. Default Admin PIN: 12345678, new Admin PIN must be >=8 characters.)
+          * name
+          * login
+          * list
+          * quit
+       If you need to reset GPG at Yubikey (https://developers.yubico.com/ykneo-openpgp/ResetApplet.html):
+          * pkill -9 -f "(gpg-agent|gpg-connect-agent)"
+          * gpg-connect-agent --hex "scd apdu 00 20 00 81 08 40 40 40 40 40 40 40 40" /bye # 4 times
+          * gpg-connect-agent --hex "scd apdu 00 20 00 83 08 40 40 40 40 40 40 40 40" /bye # 4 times
+          * gpg-connect-agent --hex "scd apdu 00 e6 00 00" /bye
+          * gpg-connect-agent --hex "scd apdu 00 44 00 00" /bye
+          * pkill -9 -f "(gpg-agent|gpg-connect-agent)"
+          * Remove and re-insert the Yubikey.
     3. Move the private keys to Yubikey:
        gpg --edit-key {key_id}
           key 1
