@@ -838,15 +838,7 @@ class Gpg:
 Done
 
 - What have been done:
-  wget -O ~/.gnupg/gpg.conf https://raw.githubusercontent.com/drduh/config/master/gpg.conf
-  gpg --expert --full-generate-key # Choose (8) RSA choose you own capabilities and Create RSA _Certify_ key
-  export KEYID=0xFFFFF...
-  gpg --expert --edit-key $KEYID
-      addkey # Add Signing key
-      addkey # Add Encryption key
-      addkey # Add Authentication key
-      save
-  More info is here: https://github.com/drduh/YubiKey-Guide
+More info is here: https://github.com/drduh/YubiKey-Guide
 
 
 - Next steps:
@@ -861,6 +853,11 @@ Done
     sudo cp {gpg_home}/openpgp-revocs.d/{key_id}.rev /mnt/home/.../
 
   * Move keys to Yubikey:
+    0. Read this item only if you are going to move same keys to multiple Yubikeys.
+       Moving keys is a destructive process (you will NOT have private keys locally after you moved them to a Yubikey).
+       So, you have to backup {gpg_home} in order to be able to restore it later, and move same keys again to a different Yubikey.
+       Also, gpg remembers IDs of Yubikeys, if you want to use a new Yubikey (with same key), ask gpg to re-record id of the new Yubikey:
+       gpg-connect-agent "scd serialno" "learn --force" /bye
     1. Install packages:
        sudo apt update && sudo apt install cryptsetup opensc scdaemon pcscd yubikey-luks yubikey-manager yubikey-personalization yubikey-personalization-gui libpam-yubico libpam-u2f
     2. Setup card:
@@ -868,6 +865,8 @@ Done
           * admin
           * kdf-setup
           * passwd (Default PIN: 123456, new PIN must be >=6 characters. Default Admin PIN: 12345678, new Admin PIN must be >=8 characters.)
+             * change PUK
+             * change PIN
           * name
           * login
           * list
@@ -892,6 +891,14 @@ Done
           keytocard
           key 3
           save
+
+  * Add public key to your default keyring:
+    At another terminal (where you have NOT modified GNUPGHOME):
+    gpg --import gpg-{key_id}.asc
+    gpg --edit-key {key_id}
+       * trust
+         5
+       * quit
 """)
 
 
