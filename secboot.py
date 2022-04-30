@@ -153,17 +153,15 @@ class ProgPack:
         return exec(dry_run=dry_run, command=command, root_is_required=root_is_required)
 
 
-def install_if_file_does_not_exist(dry_run: bool, file: pl.Path, package: str) -> None:
-    if file.exists():
+def install_if_none_of_files_exist(dry_run: bool, files: t.List[pl.Path], package: str) -> None:
+    if any(file.exists() for file in files):
         return
-    logger.info(f'File: {file} does not exist => installing it via package: {package}')
+    logger.info(f'None of the files: {files} exists => installing it via package: {package}')
     res: ExecRes = exec(dry_run=dry_run, command=f'apt install -y {package}')
     if res.is_err():
-        logger.critical(f"File: {file} does not exist, and we failed to install it via package: "
-                        f"{package}: {res}")
-    if not file.exists() and not dry_run:
-        logger.critical(f"File: {file} still does not exist even after installing {package}")
-
+        logger.critical(f"Failed to install package: {package}: {res}")
+    if not any(file.exists() for file in files) and not dry_run:
+        logger.critical(f"None of the files: {files} still exists even after installing {package}")
 
 
 
@@ -262,8 +260,10 @@ class YubikeySsl(SslEngine):
         # DSO support routines:dlfcn_load:could not load the shared
         # library:../crypto/dso/dso_dlfcn.c:118:filename(/usr/lib/x86_64-linux-gnu/engines-1.1/pkcs11.so):
         # /usr/lib/x86_64-linux-gnu/engines-1.1/pkcs11.so: cannot open shared object file: No such file or directory
-        install_if_file_does_not_exist(dry_run=self.dry_run,
-                                       file=pl.Path("/usr/lib/x86_64-linux-gnu/engines-1.1/pkcs11.so"),
+        install_if_none_of_files_exist(dry_run=self.dry_run,
+                                       files=[pl.Path("/usr/lib/x86_64-linux-gnu/engines-1.1/pkcs11.so"), # Before Ubuntu 22.04
+                                              pl.Path("/usr/lib/x86_64-linux-gnu/engines-3/pkcs11.so")    # Starting from Ubuntu 22.04
+                                              ],
                                        package="libengine-pkcs11-openssl")
 
         cmd: str = f"sbsign --engine pkcs11 --key '{self.pkcs11_obj}' --cert {self.crt_path} --output {out} {file}"
@@ -1555,7 +1555,7 @@ def make_new_efistub_boot(dry_run: bool,
     def create_unified_kernel_from(dry_run: bool, boot_dir: pl.Path, version: KernelVersion, out: pl.Path, uefi: UefiEngine) -> None:
         logger.info(f'Creating unified kernel image from vmlinuz and initrd {version.to_string()} in {boot_dir}')
         linuxx64_efi_stub: pl.Path = pl.Path('/usr/lib/systemd/boot/efi/linuxx64.efi.stub')
-        install_if_file_does_not_exist(dry_run, linuxx64_efi_stub, 'systemd')
+        install_if_none_of_files_exist(dry_run, [linuxx64_efi_stub], 'systemd')
         kernel: pl.Path = boot_dir / version.to_string('vmlinuz-')
         initrd: pl.Path = boot_dir / version.to_string('initrd.img-')
         res: ExecRes = ProgPack('objcopy', 'binutils').exec(
@@ -2005,7 +2005,7 @@ class Qemu:
 
 
 def guide_user_through_vm_creation(dry_run: bool, orig: QemuImage) -> None:
-    install_if_file_does_not_exist(dry_run=dry_run, file=QemuImage.SYS_UEFI(), package='ovmf')
+    install_if_file_does_not_exist(dry_run=dry_run, files=[QemuImage.SYS_UEFI()], package='ovmf')
     res_1: ExecRes = exec(dry_run, f'cp -f {QemuImage.SYS_UEFI()} {orig.uefi}')
     if res_1.is_err():
         logger.critical(f'Failed to cp {QemuImage.SYS_UEFI()} to {orig.uefi}: {res_1}')
