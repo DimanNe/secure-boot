@@ -5,6 +5,7 @@ import sys
 import abc
 import time
 import shutil
+import distro
 import logging
 import pexpect
 import argparse
@@ -132,10 +133,105 @@ class TestShellCommandExists(ut.TestCase):
         self.assertFalse(shell_program_exists('unameqwer1324'))
 
 
+
+
+
+@dc.dataclass
+class ProviderPair: # Both: entity and package can change from one version of OS to another:
+    entity: t.Union[str, pl.Path] = ""  # File or executable
+    pkg: str = "" # Package
+
+    def __iter__(self): # For structural binding to work
+        return iter((self.entity, self.pkg))
+
+
+class ProviderEfiStub:
+    linuxx64_efi_stub: pl.Path = pl.Path('/usr/lib/systemd/boot/efi/linuxx64.efi.stub')
+    default: ProviderPair = ProviderPair(entity=linuxx64_efi_stub, pkg="systemd-boot-efi")
+    overrides: t.Dict[str, ProviderPair] = {"Ubuntu-22.10": ProviderPair(entity=linuxx64_efi_stub, pkg='systemd'),
+                                            "Ubuntu-22.04": ProviderPair(entity=linuxx64_efi_stub, pkg='systemd')}
+
+class ProviderPkcs11:
+    pkcs11_so_1: pl.Path = pl.Path("/usr/lib/x86_64-linux-gnu/engines-1.1/pkcs11.so") # Before Ubuntu 22.04
+    pkcs11_so_2: pl.Path = pl.Path("/usr/lib/x86_64-linux-gnu/engines-3/pkcs11.so") # Starting from Ubuntu 22.04
+    default: ProviderPair = ProviderPair(entity=pkcs11_so_2, pkg="libengine-pkcs11-openssl")
+    overrides: t.Dict[str, ProviderPair] = {"Ubuntu-21.10": ProviderPair(entity=pkcs11_so_1, pkg='libengine-pkcs11-openssl')}
+
+class ProviderSbsign:
+    default: ProviderPair = ProviderPair(entity='sbsign', pkg='sbsigntool')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderSbverify:
+    default: ProviderPair = ProviderPair(entity='sbverify', pkg='sbsigntool')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderYubicoPivTool:
+    default: ProviderPair = ProviderPair(entity='yubico-piv-tool', pkg='yubico-piv-tool')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderOpenssl:
+    default: ProviderPair = ProviderPair(entity='openssl', pkg='openssl')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderEfiUpdatevar:
+    default: ProviderPair = ProviderPair(entity='efi-updatevar', pkg='efitools')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderCertToEfiSigList:
+    default: ProviderPair = ProviderPair(entity='cert-to-efi-sig-list', pkg='efitools')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderSignEfiSigList:
+    default: ProviderPair = ProviderPair(entity='sign-efi-sig-list', pkg='efitools')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderEfiReadvar:
+    default: ProviderPair = ProviderPair(entity='efi-readvar', pkg='efitools')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderPesign:
+    default: ProviderPair = ProviderPair(entity='pesign', pkg='pesign')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderGpg:
+    default: ProviderPair = ProviderPair(entity='gpg', pkg='gpg')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderGrubMkstandalone:
+    default: ProviderPair = ProviderPair(entity='grub-mkstandalone', pkg='grub-common')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderGrubMkconfig:
+    default: ProviderPair = ProviderPair(entity='grub-mkconfig', pkg='grub-common')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderObjcopy:
+    default: ProviderPair = ProviderPair(entity='objcopy', pkg='binutils')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderEfibootmgr:
+    default: ProviderPair = ProviderPair(entity='efibootmgr', pkg='efibootmgr')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+class ProviderQemuImg:
+    default: ProviderPair = ProviderPair(entity='qemu-img', pkg='qemu-utils')
+    overrides: t.Dict[str, ProviderPair] = {}
+
+
+
+def get_provider_pair(provider: t.Type[t.Any]) -> ProviderPair:
+    key: str = f'{distro.name()}-{distro.version()}'
+    return provider.overrides.get(key, provider.default)
+
+
 @dc.dataclass
 class ProgPack:
     program: str = ""
     package: str = ""
+
+    def __init__(self, provider: t.Type[t.Any]):
+        self.program, self.package = get_provider_pair(provider)
+
 
     def exec(self, dry_run: bool, command: str, root_is_required: bool = False) -> ExecRes:
         def install_if_program_does_not_exist(dry_run: bool, pp: ProgPack) -> None:
@@ -166,7 +262,31 @@ def install_if_none_of_files_exist(dry_run: bool, files: t.List[pl.Path], packag
 
 
 
+all_providers: t.Dict[str, t.Type[t.Any]] = {
+    "EfiStub"         : ProviderEfiStub         ,
+    "Pkcs11"          : ProviderPkcs11          ,
+    "Sbsign"          : ProviderSbsign          ,
+    "Sbverify"        : ProviderSbverify        ,
+    "YubicoPivTool"   : ProviderYubicoPivTool   ,
+    "Openssl"         : ProviderOpenssl         ,
+    "EfiUpdatevar"    : ProviderEfiUpdatevar    ,
+    "CertToEfiSigList": ProviderCertToEfiSigList,
+    "SignEfiSigList"  : ProviderSignEfiSigList  ,
+    "EfiReadvar"      : ProviderEfiReadvar      ,
+    "Pesign"          : ProviderPesign          ,
+    "Gpg"             : ProviderGpg             ,
+    "GrubMkstandalone": ProviderGrubMkstandalone,
+    "GrubMkconfig"    : ProviderGrubMkconfig    ,
+    "Objcopy"         : ProviderObjcopy         ,
+    "Efibootmgr"      : ProviderEfibootmgr      ,
+    "QemuImg"         : ProviderQemuImg         ,
+}
 
+def print_all_providers_info():
+    for name, provider in all_providers.items():
+        pair: ProviderPair = get_provider_pair(provider)
+        assert(len(str(pair.entity)) and len(str(pair.pkg)))
+        print(f'{name}: {pair.entity} => {pair.pkg}')
 
 
 
@@ -216,14 +336,14 @@ class FsSsl(SslEngine):
         key_path: pl.Path = pl.Path(f'{self.basename}.key').expanduser().resolve()
         crt_path: pl.Path = pl.Path(f'{self.basename}.crt').expanduser().resolve()
         cmd: str = f'sbsign --key {key_path} --cert {crt_path} --output {out} {file}'
-        res: ExecRes = ProgPack('sbsign', 'sbsigntool').exec(self.dry_run, cmd)
+        res: ExecRes = ProgPack(ProviderSbsign).exec(self.dry_run, cmd)
         if res.is_err():
             logger.critical(f'Failed to sign {file} with {key_path} and {crt_path} and/or save it to {out}: {res}')
 
     def verify(self, file: pl.Path):
         crt_path: pl.Path = pl.Path(f'{self.basename}.crt').expanduser().resolve()
         cmd: str = f'sbverify --cert {crt_path} {file}'
-        res: ExecRes = ProgPack('sbverify', 'sbsigntool').exec(self.dry_run, cmd)
+        res: ExecRes = ProgPack(ProviderSbverify).exec(self.dry_run, cmd)
         if res.is_err():
             logger.critical(f'Failed to verify signed file: {file} with cert {crt_path}: {res}')
 
@@ -247,7 +367,7 @@ class YubikeySsl(SslEngine):
     def extract_certificate(dry_run: bool, slot_id: str, dst: pl.Path) -> str:
         # yubico-piv-tool -a read-certificate -s 9c -o db_from_yu.crt -K PEM
         command: str = f'yubico-piv-tool {NFC_READER_HINT} -a read-certificate --slot {slot_id} -o {dst} -K PEM'
-        res: ExecRes = ProgPack('yubico-piv-tool', 'yubico-piv-tool').exec(dry_run, command)
+        res: ExecRes = ProgPack(ProviderYubicoPivTool).exec(dry_run, command)
         if res.is_err():
             logger.critical(f'Failed read certificate from Yubikey, from slot {slot_id} and/or save it to {dst}: {res}')
         return command
@@ -260,11 +380,8 @@ class YubikeySsl(SslEngine):
         # DSO support routines:dlfcn_load:could not load the shared
         # library:../crypto/dso/dso_dlfcn.c:118:filename(/usr/lib/x86_64-linux-gnu/engines-1.1/pkcs11.so):
         # /usr/lib/x86_64-linux-gnu/engines-1.1/pkcs11.so: cannot open shared object file: No such file or directory
-        install_if_none_of_files_exist(dry_run=self.dry_run,
-                                       files=[pl.Path("/usr/lib/x86_64-linux-gnu/engines-1.1/pkcs11.so"), # Before Ubuntu 22.04
-                                              pl.Path("/usr/lib/x86_64-linux-gnu/engines-3/pkcs11.so")    # Starting from Ubuntu 22.04
-                                              ],
-                                       package="libengine-pkcs11-openssl")
+        file_pkg: ProviderPair = get_provider_pair(ProviderPkcs11)
+        install_if_none_of_files_exist(dry_run=self.dry_run, files=[file_pkg.entity], package=file_pkg.pkg)
 
         cmd: str = f"sbsign --engine pkcs11 --key '{self.pkcs11_obj}' --cert {self.crt_path} --output {out} {file}"
         logger.debug(f'{"NOT " if self.dry_run else ""}executing: {cmd}')
@@ -327,7 +444,7 @@ class FsUefi(UefiEngine):
         print(f'  - Enroll your own (db.cer, KEK.cer, PK.cer)')
         # def enroll_esl(dry_run: bool, dir: pl.Path, esl_var: UefiVars) -> None:
         #     esl: pl.Path = SslEngine.esl_path(dir, esl_var.name)
-        #     res: ExecRes = ProgPack('efi-updatevar', 'efitools').exec(dry_run,
+        #     res: ExecRes = ProgPack(ProviderEfiUpdatevar).exec(dry_run,
         #                                                               f'efi-updatevar -e -f {esl} {esl_var.name}')
         #     if res.is_err():
         #         logger.critical(f'Failed to enroll: {esl}: {res}')
@@ -374,23 +491,23 @@ class FsUefi(UefiEngine):
             crt_out: pl.Path = SslEngine.crt_path(output_dir, var.name)
             cer_out: pl.Path = SslEngine.cer_path(output_dir, var.name)
             esl_out: pl.Path = SslEngine.esl_path(output_dir, var.name)
-            gen_res: ExecRes = ProgPack('openssl', 'openssl').exec(dry_run,
-                                                                   f'openssl req -new -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 '
-                                                                   f'-subj "/CN={id_for(var.name, id)}/" -keyout {key_out} -out {crt_out}')
+            gen_res: ExecRes = ProgPack(ProviderOpenssl).exec(dry_run,
+                                                                f'openssl req -new -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 '
+                                                                f'-subj "/CN={id_for(var.name, id)}/" -keyout {key_out} -out {crt_out}')
             if gen_res.is_ok():
                 logger.info(f'Generated private key in {key_out}, cert in {crt_out}. You might want to check that '
                             f'everything is fine: "openssl x509 -inform pem -in {crt_out} -text"')
             else:
                 logger.critical(f'Failed to generate {var.name} and/or save it to {key_out} and {crt_out}: {gen_res}')
 
-            cer_res: ExecRes = ProgPack('openssl', 'openssl').exec(dry_run,
-                                                                   f'openssl x509 -outform der -in {crt_out} -out {cer_out}')
+            cer_res: ExecRes = ProgPack(ProviderOpenssl).exec(dry_run,
+                                                              f'openssl x509 -outform der -in {crt_out} -out {cer_out}')
             if cer_res.is_ok():
                 logger.info(f'Converted PEM-encoded .crt to DER-encoded .cer at: {cer_out}')
             else:
                 logger.critical(f'Failed to convert PEM-encoded .crt to DER-encoded .cer and/or save it to {cer_out}: {cer_res}')
 
-            # esl_res: ExecRes = ProgPack('cert-to-efi-sig-list', 'efitools').exec(dry_run,
+            # esl_res: ExecRes = ProgPack(ProviderCertToEfiSigList).exec(dry_run,
             #                                                                      f'bash -c "cert-to-efi-sig-list -g $(uuidgen) {cer_out} {esl_out}"')
             # if esl_res.is_ok():
             #     logger.info(f'Converted cer {cer_out} to esl: {esl_out}')
@@ -402,7 +519,7 @@ class FsUefi(UefiEngine):
         #     with_crt: pl.Path = SslEngine.crt_path(output_dir, with_var.name)
         #     esl_to_sign: pl.Path = SslEngine.esl_path(output_dir, var_to_sign.name)
         #     auth_out: pl.Path = SslEngine.auth_path(output_dir, var_to_sign.name)
-        #     res: ExecRes = ProgPack('sign-efi-sig-list', 'efitools').exec(dry_run,
+        #     res: ExecRes = ProgPack(ProviderSignEfiSigList).exec(dry_run,
         #                  f'sign-efi-sig-list -k {with_key} -c {with_crt} {var_to_sign.name} {esl_to_sign} {auth_out}')
         #     if res.is_err():
         #         logger.critical(f'Failed to sign esl: {esl_to_sign} with {with_var.name} '
@@ -487,7 +604,7 @@ class YubikeyUefi(UefiEngine):
         def enable_retired_slots(dry_run: bool) -> None:
             # http://cedric.dufour.name/blah/IT/YubiKeyHowto.html
             # escaped_nfc_reader_hint = NFC_READER_HINT.replace('"', '\\"')
-            res: ExecRes = ProgPack('yubico-piv-tool', 'yubico-piv-tool').exec(dry_run,
+            res: ExecRes = ProgPack(ProviderYubicoPivTool).exec(dry_run,
                f'bash -c "echo -n C10114C20100FE00 | yubico-piv-tool {NFC_READER_HINT} -a write-object --id 0x5FC10C -i -"')
             if res.is_err():
                 logger.critical(f'Failed to enable retired slots: {res}')
@@ -501,13 +618,13 @@ class YubikeyUefi(UefiEngine):
             key_in: pl.Path = SslEngine.key_path(dir, var.name)
             crt_in: pl.Path = SslEngine.crt_path(dir, var.name)
             ikcmd: str = f'yubico-piv-tool {NFC_READER_HINT} -a import-key --slot {slot} --input {key_in} --key-format PEM'
-            key_res: ExecRes = ProgPack('yubico-piv-tool', 'yubico-piv-tool').exec(dry_run, ikcmd)
+            key_res: ExecRes = ProgPack(ProviderYubicoPivTool).exec(dry_run, ikcmd)
             if key_res.is_err():
                 logger.critical(f'Failed to add key: {key_in} in slot: {slot}')
             logger.info(f'Added key: {key_in} in slot: {slot}')
 
             iccmd: str = f'yubico-piv-tool {NFC_READER_HINT} -a import-certificate --slot {slot} --input {crt_in} --key-format PEM'
-            crt_res: ExecRes = ProgPack('yubico-piv-tool', 'yubico-piv-tool').exec(dry_run, iccmd)
+            crt_res: ExecRes = ProgPack(ProviderYubicoPivTool).exec(dry_run, iccmd)
             if crt_res.is_err():
                 logger.critical(f'Failed to add certificate: {crt_in} in slot: {slot}')
             logger.info(f'Added certificate: {crt_in} in slot: {slot}')
@@ -548,7 +665,7 @@ def backup_certs_from_uefi(dry_run: bool, output_dir: pl.Path) -> None:
     # efi-readvar -v PK -o PK.old.esl
     def save(dry_run: bool, output_dir: pl.Path, var_name: str, file_name: str):
         out = str(output_dir / file_name)
-        res: ExecRes = ProgPack('efi-readvar', 'efitools').exec(dry_run, f'efi-readvar -v {var_name} -o {out}')
+        res: ExecRes = ProgPack(ProviderEfiReadvar).exec(dry_run, f'efi-readvar -v {var_name} -o {out}')
         if res.is_ok():
             logger.info(f'Saved {var_name} to {out}. You might want to extract der certificates from it with: '
                         f'"sig-list-to-certs {out} {var_name}" and inspect it further with '
@@ -565,7 +682,7 @@ def backup_certs_from_uefi(dry_run: bool, output_dir: pl.Path) -> None:
 
 def remove_all_ssl_signatures_inplace(dry_run: bool, filepath: pl.Path) -> None:
     def get_number_of_signatures(dry_run: bool, filepath: pl.Path) -> int:
-        res: ExecRes = ProgPack('pesign', 'pesign').exec(dry_run, f'pesign -S -i {filepath}')
+        res: ExecRes = ProgPack(ProviderPesign).exec(dry_run, f'pesign -S -i {filepath}')
         if res.is_err():
             logger.critical(f'Failed to get signatures from {filepath}: {res}')
 
@@ -594,8 +711,8 @@ def remove_all_ssl_signatures_inplace(dry_run: bool, filepath: pl.Path) -> None:
 
     def remove_one_signature(dry_run: bool, inp: pl.Path, out: pl.Path) -> None:
         # pesign --signature-number 0 -r -i shimx64.efi -o shimx64.efi
-        res: ExecRes = ProgPack('pesign', 'pesign').exec(dry_run,
-                                                         f'pesign --signature-number 0 --remove-signature -i {inp} -o {out}')
+        res: ExecRes = ProgPack(ProviderPesign).exec(dry_run,
+                                                       f'pesign --signature-number 0 --remove-signature -i {inp} -o {out}')
         if res.is_ok():
             logger.debug(f'Removed existing signature from {inp}, and wrote result in {out}')
         else:
@@ -782,7 +899,7 @@ class Gpg:
     @staticmethod
     def exec_in(dry_run: bool, in_dir: pl.Path, cmd: str) -> ExecRes:
         os.environ["GNUPGHOME"] = str(in_dir)
-        res: ExecRes = ProgPack('gpg', 'gpg').exec(dry_run, cmd)
+        res: ExecRes = ProgPack(ProviderGpg).exec(dry_run, cmd)
         del os.environ["GNUPGHOME"]
         return res
 
@@ -1192,7 +1309,7 @@ reboot
                        f'--output {out_path} ' \
                        f'boot/grub/grub.cfg={trampoline_cfg.file} ' \
                        f'boot/grub/grub.cfg.sig={trampoline_cfg.sig}'
-        res: ExecRes = ProgPack('grub-mkstandalone', 'grub-common').exec(dry_run, command)
+        res: ExecRes = ProgPack(ProviderGrubMkstandalone).exec(dry_run, command)
         if res.is_err():
             logger.critical(f'Failed to create_standalone_grub: {command} failed: {res}')
         logger.info(f'Created standalone grub EFI binary at: {out_path}')
@@ -1234,8 +1351,8 @@ menuentry '{dist} (secure boot)' --unrestricted --class ubuntu --class gnu-linux
             return menu_entries
 
         tmp_main_config: pl.Path = out_path.with_suffix(out_path.suffix + ".tmp")
-        res: ExecRes = ProgPack('grub-mkconfig', 'grub-common').exec(dry_run, f"grub-mkconfig -o {tmp_main_config}",
-                                                                     root_is_required=True)
+        res: ExecRes = ProgPack(ProviderGrubMkconfig).exec(dry_run, f"grub-mkconfig -o {tmp_main_config}",
+                                                             root_is_required=True)
         if res.is_err():
             logger.critical(f'Failed to create_grub_main_config and/or save it to {tmp_main_config}: {res}')
 
@@ -1554,17 +1671,19 @@ def make_new_efistub_boot(dry_run: bool,
                           uefi: UefiEngine) -> None:
     def create_unified_kernel_from(dry_run: bool, boot_dir: pl.Path, version: KernelVersion, out: pl.Path, uefi: UefiEngine) -> None:
         logger.info(f'Creating unified kernel image from vmlinuz and initrd {version.to_string()} in {boot_dir}')
-        linuxx64_efi_stub: pl.Path = pl.Path('/usr/lib/systemd/boot/efi/linuxx64.efi.stub')
-        install_if_none_of_files_exist(dry_run, [linuxx64_efi_stub], 'systemd')
+
+        file_pkg: ProviderPair = get_provider_pair(ProviderEfiStub)
+        install_if_none_of_files_exist(dry_run, [file_pkg.entity], file_pkg.pkg)
+
         kernel: pl.Path = boot_dir / version.to_string('vmlinuz-')
         initrd: pl.Path = boot_dir / version.to_string('initrd.img-')
-        res: ExecRes = ProgPack('objcopy', 'binutils').exec(
+        res: ExecRes = ProgPack(ProviderObjcopy).exec(
             dry_run,
             f'objcopy --add-section .osrel="/etc/os-release" --change-section-vma .osrel=0x20000 '
             f'        --add-section .cmdline="/proc/cmdline" --change-section-vma .cmdline=0x30000 '
             f'        --add-section .linux="{kernel}" --change-section-vma .linux=0x40000 '
             f'        --add-section .initrd="{initrd}" --change-section-vma .initrd=0x3000000 '
-            f'{linuxx64_efi_stub} {out}')
+            f'{ProviderEfiStub.linuxx64_efi_stub} {out}')
         if res.is_err():
             logger.critical(f'Failed to create_unified_kernel_from {kernel}, {initrd} and save it to {out}: {res}')
 
@@ -1573,7 +1692,7 @@ def make_new_efistub_boot(dry_run: bool,
 
     def repopulate_efibootmgr_if_needed(dry_run: bool, disk: str, partition: int) -> None:
         entry_regex = re.compile(r'^Boot(?P<g1>[0-9A-F]{4})')
-        res: ExecRes = ProgPack('efibootmgr', 'efibootmgr').exec(False, 'efibootmgr -v')
+        res: ExecRes = ProgPack(ProviderEfibootmgr).exec(False, 'efibootmgr -v')
         if res.is_err():
             logger.critical(f'Failed get info from efibootmgr: {res}')
         boot_entries = [line for line in res.out.split('\n') if entry_regex.match(line)]
@@ -1599,7 +1718,7 @@ def make_new_efistub_boot(dry_run: bool,
         for entry in boot_entries:
             boot_id: str = entry_regex.match(entry).group('g1')
             logger.info(f'Removing boot: {boot_id}')
-            res: ExecRes = ProgPack('efibootmgr', 'efibootmgr').exec(dry_run,
+            res: ExecRes = ProgPack(ProviderEfibootmgr).exec(dry_run,
                                    f'efibootmgr -B -b {boot_id}', root_is_required=True)
             if res.is_err():
                 logger.critical(f'Failed to remove Boot {boot_id}: {res}')
@@ -1609,7 +1728,7 @@ def make_new_efistub_boot(dry_run: bool,
             logger.info(f'Adding boot entry for "{label}", {efi}')
             #            efibootmgr --create --disk /dev/nvme0n1 --part 1 --label "SecBoot Previous Linux" --loader "/secboot-linux-prev.efi" --unicode "BOOT_IMAGE=/vmlinuz-5.11.0-16-generic root=/dev/mapper/vgkubuntu-root ro quiet splash vt.handoff=7 nvidia-drm.modeset=1"
             cmd: str = f'efibootmgr --create --disk {disk} --part {partition} --label "{label}" --loader "{efi}" --unicode "{kernel_parameters}"'
-            res: ExecRes = ProgPack('efibootmgr', 'efibootmgr').exec(dry_run, cmd, root_is_required=True)
+            res: ExecRes = ProgPack(ProviderEfibootmgr).exec(dry_run, cmd, root_is_required=True)
             if res.is_err():
                 logger.critical(f'Failed to add an entry for "{EfiStubBootResult.PREV_BOOTMGR_ENTRY}" with efi at'
                                 f'{efi} in efibootmgr: {res}')
@@ -1754,8 +1873,7 @@ class QemuImage:
 
         # qemu-img create -f qcow2 -b sb-image.img trying_to_flip_a_bit.img
         #
-        res: ExecRes = ProgPack('qemu-img', 'qemu-utils').exec(dry_run,
-                                                               f'qemu-img create -f qcow2 -b {self.image} {new.image}')
+        res: ExecRes = ProgPack(ProviderQemuImg).exec(dry_run, f'qemu-img create -f qcow2 -b {self.image} {new.image}')
         if res.is_err():
             logger.critical(f'Failed to make a snapshot of {self.image} in {new.image}: {res}')
         logger.info(f"Created new snapshot {new} from {self} and made the latter immutable")
@@ -2005,7 +2123,7 @@ class Qemu:
 
 
 def guide_user_through_vm_creation(dry_run: bool, orig: QemuImage) -> None:
-    install_if_file_does_not_exist(dry_run=dry_run, files=[QemuImage.SYS_UEFI()], package='ovmf')
+    install_if_none_of_files_exist(dry_run=dry_run, files=[QemuImage.SYS_UEFI()], package='ovmf')
     res_1: ExecRes = exec(dry_run, f'cp -f {QemuImage.SYS_UEFI()} {orig.uefi}')
     if res_1.is_err():
         logger.critical(f'Failed to cp {QemuImage.SYS_UEFI()} to {orig.uefi}: {res_1}')
@@ -2616,7 +2734,8 @@ def main():
     # parser.add_argument('--run-tests', default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument('--run-tests', dest='run_tests', action='store_true')
     parser.add_argument('--no-run-tests', dest='run_tests', action='store_false')
-    parser.set_defaults(run_tests=os.uname()[1] == "Impedance")
+    parser.set_defaults(run_tests=os.uname()[1].lower() == "Impedance".lower())
+    parser.add_argument("--print-all-providers-info", action='store_true')
 
     # -----------------------------------------------------------------------------------------------
     parser_backup_cert_from_uefi = subparsers.add_parser(
@@ -2661,8 +2780,7 @@ def main():
     # -----------------------------------------------------------------------------------------------
     parser_enroll_ssl_to_uefi = subparsers.add_parser(
         ENROLL_SSL_TO_UEFI_CMD_LINE_OPT,
-        help=f'Enrolls PK/KEK/DB certificates to UEFI. Assumes that UEFI is in "Setup Mode" (temporarily disable '
-             f'secure boot, and delete all preexisting certificates). Example of usage: '
+        help=f'Helps to enrolls PK/KEK/DB certificates to UEFI. Example of usage: '
              f'"{ENROLL_SSL_TO_UEFI_EXAMPLE_FS}" or "{ENROLL_SSL_TO_UEFI_EXAMPLE_YUBIKEY}"')
     UefiEnginesArgsFactory.add_args(parser_enroll_ssl_to_uefi)
 
@@ -2803,6 +2921,9 @@ def main():
     if not python_import_exists("pexpect"):
         logger.critical("Python module pexpect is not installed, Install it manually: "
                         "sudo apt install python3-pexpect. Exiting...")
+    if not python_import_exists("distro"):
+        logger.critical("Python module distro is not installed, Install it manually: "
+                        "sudo apt install python3-distro. Exiting...")
 
     if args.run_tests:
         print('Running quick self-test (you can disable them with --no-run-tests)...\n')
@@ -2811,26 +2932,32 @@ def main():
         os.chdir(cwd_backup)
         print(f'Testing Done\n')
 
+    if args.print_all_providers_info:
+        print_all_providers_info()
 
     if args.subparser_name == BACKUP_CERTS_FROM_UEFI_CMD_LINE_OPT:
         backup_certs_from_uefi(dry_run=args.dry_run, output_dir=pl.Path(args.o).expanduser().resolve())
         print(f'\nNext steps:\nUse {GENERATE_UEFI_KEYS_CMD_LINE_OPT} and '
               f'{GENERATE_GPG_KEYS_CMD_LINE_OPT} to generate keys and certificates.')
+
     elif args.subparser_name == GENERATE_UEFI_KEYS_CMD_LINE_OPT:
         FsUefi.generate_keys(dry_run=args.dry_run, keys_dir=pl.Path(args.o).expanduser().resolve(), id=args.id)
         print(f'\nNext steps:\nEnroll generated certificates in UEFI (either directly by copying DER (.cer) and hashes '
               f'(in the HSH format) on a USB flash drive or by using {ENROLL_SSL_TO_UEFI_CMD_LINE_OPT}).\n'
               f'Enroll them on a Yubikey via {ENROLL_SSL_TO_YUBIKEY_CMD_LINE_OPT}')
+
     elif args.subparser_name == GENERATE_GPG_KEYS_CMD_LINE_OPT:
         Gpg.generate_keys(dry_run=args.dry_run,
                           gpg_home=pl.Path(args.GNUPGHOME).expanduser().resolve(),
                           id=args.id,
                           passphrase=vars(args)["gpg/pass"] or "")
+
     elif args.subparser_name == ENROLL_SSL_TO_UEFI_CMD_LINE_OPT:
         with tempf.TemporaryDirectory(prefix="secboot_") as str_work_dir:
             work_dir: pl.Path = pl.Path(str_work_dir)
-            uefi=UefiEnginesArgsFactory.create_from_args(args, work_dir, password='')
+            uefi=UefiEnginesArgsFactory.create_from_args(args, work_dir, asked_password='')
             uefi.enroll_certs_to_uefi()
+
     elif args.subparser_name == ENROLL_SSL_TO_YUBIKEY_CMD_LINE_OPT:
         NfcReaderArg.handle_arg(args)
         YubikeyUefi.enroll_to_yubikey(dry_run=args.dry_run, dir=pl.Path(args.keys_dir).expanduser().resolve())
@@ -2838,6 +2965,7 @@ def main():
         print(f'All keys and certificates have been enrolled to Yubikey.')
         print(f'You can now safely remove all of them from filesystem - everything '
               f'required for signing is stored on you Yubikey')
+
     elif args.subparser_name == RE_SIGN_EFI_FILE_CMD_LINE_OPT:
         file_to_sign: pl.Path = pl.Path(args.file_to_sign).expanduser().resolve()
         signed_file_path: pl.Path = pl.Path(args.signed_file_path).expanduser().resolve() if args.signed_file_path else file_to_sign
@@ -2848,6 +2976,7 @@ def main():
                              file_to_sign=file_to_sign,
                              signed_file_path=signed_file_path,
                              uefi=UefiEnginesArgsFactory.create_from_args(args, work_dir, creds.piv_pass))
+
     elif args.subparser_name == RE_SIGN_FILE_WITH_GPG_CMD_LINE_OPT:
         file_and_sig: FileAndSig = FileAndSig(pl.Path(args.file_to_sign).expanduser().resolve())
         if args.signature_path:
@@ -2857,6 +2986,7 @@ def main():
             work_dir: pl.Path = pl.Path(str_work_dir)
             with GpgEnginesArgsFactory.create_from_args(args, work_dir, creds.gpg_pass) as gpg:
                 re_sign_file_with_gpg(dry_run=args.dry_run, file_and_sig=file_and_sig, gpg=gpg)
+
     elif args.subparser_name == MAKE_NEW_GRUB_BOOT_CMD_LINE_OPT:
         def continue_makeing_new_boot(args, work_dir: pl.Path) -> None:
             creds: UserCreds = UserCreds.ask(dry_run=args.dry_run,
@@ -2900,12 +3030,16 @@ def main():
 
     elif args.subparser_name == QEMU_INITIALISE_EFISTUB_CMD_LINE_OPT:
         qemu_efistub_initialise(dry_run=args.dry_run, vm_dir=pl.Path(args.vm_dir).expanduser().resolve())
+
     elif args.subparser_name == QEMU_RUN_EFISTUB_TESTS_CMD_LINE_OPT:
         qemu_efistub_run_tests(dry_run=args.dry_run, vm_dir=pl.Path(args.vm_dir).expanduser().resolve())
+
     elif args.subparser_name == QEMU_INITIALISE_GRUB_CMD_LINE_OPT:
         qemu_grub_initialise(dry_run=args.dry_run, vm_dir=pl.Path(args.vm_dir).expanduser().resolve())
+
     elif args.subparser_name == QEMU_RUN_GRUB_TESTS_CMD_LINE_OPT:
         qemu_grub_run_tests(dry_run=args.dry_run, vm_dir=pl.Path(args.vm_dir).expanduser().resolve())
+
     else:
         print("No actions requested, exiting...\n")
         parser.print_help()
