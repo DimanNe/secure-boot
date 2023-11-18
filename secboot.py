@@ -238,6 +238,8 @@ class ProgPack:
             if shell_program_exists(pp.program):
                 return
             logger.warning(f'Program: {pp.program} does not exist => installing it via package: {pp.package}')
+            # Disable questions like: needrestart
+            os.environ['DEBIAN_FRONTEND'] = 'noninteractive'
             res: ExecRes = exec(dry_run=dry_run, command=f'apt install -y {pp.package}', root_is_required=True)
             if res.is_err():
                 logger.critical(f"Program: {pp.program} does not exist, and we failed to install it via package: "
