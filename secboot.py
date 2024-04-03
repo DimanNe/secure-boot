@@ -655,6 +655,7 @@ class YubikeyUefi(UefiEngine):
     # You can find "id=%05" via:
     # apt install gnutls-bin ykcs11
     # p11tool --provider /usr/lib/x86_64-linux-gnu/libykcs11.so --list-privkeys --login
+    # or: pkcs11-tool --module /usr/lib/x86_64-linux-gnu/libykcs11.so -O
     _YUBIKEY_SLOT_MAPPING: t.Dict[UefiVars, t.Tuple[str, str]] = {
         UefiVars.PK: ("82", "pkcs11:manufacturer=piv_II;id=%05"), # Retired Key 1
         UefiVars.KEK: ("9d", "pkcs11:manufacturer=piv_II;id=%03"), # Key Management
