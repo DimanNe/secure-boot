@@ -997,7 +997,7 @@ More info is here: https://github.com/drduh/YubiKey-Guide
           * gpg-connect-agent --hex "scd apdu 00 20 00 83 08 40 40 40 40 40 40 40 40" /bye # 4 times
           * gpg-connect-agent --hex "scd apdu 00 e6 00 00" /bye
           * gpg-connect-agent --hex "scd apdu 00 44 00 00" /bye
-          * pkill -9 -f "(gpg-agent|gpg-connect-agent)"
+          * sudo pkill -9 -f "(gpg-agent|gpg-connect-agent|scdaemon|pcscd)"
           * Remove and re-insert the Yubikey.
     3. Move the private keys to Yubikey:
        gpg --edit-key {key_id}
