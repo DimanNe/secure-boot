@@ -352,6 +352,40 @@ class FsSsl(SslEngine):
 
 NFC_READER_HINT: str = ''
 
+def get_scard_devices_paths(dry_run: bool) -> t.List[str]:
+    usb_dev: ExecRes = exec(dry_run, "usb-devices")
+    if usb_dev.is_err():
+        logger.critical(f'Failed to get list of usb-devices: {usb_dev}')
+
+    bus_pattern = re.compile(r'T:.*Bus=([0-9]+)')
+    dev_pattern = re.compile(r'T:.*Dev#= *([0-9]+)')
+    res = []
+
+    for section in usb_dev.out.replace('\r\n', '\n').strip().split('\n\n'):
+       if 'Cls=0b(scard)' not in section:
+          continue
+       bus_match = bus_pattern.search(section)
+       dev_match = dev_pattern.search(section)
+       if not bus_match or not dev_match:
+          continue
+       bus = int(bus_match.group(1))
+       dev = int(dev_match.group(1))
+       res.append(f"/dev/bus/usb/{bus:03d}/{dev:03d}")
+
+    return res
+
+# class OutputLogger:
+#     def __init__(self, encode='utf-8'):
+#         self.encode = encode
+#     def write(self, s):
+#         if isinstance(s, bytes):
+#             s = s.decode(self.encode, errors='ignore')
+#         sys.stdout.write(s)
+#         sys.stdout.flush()
+#     def flush(self):
+#         sys.stdout.flush()
+
+
 # SSL Engine implementation that can use Yubikey
 class YubikeySsl(SslEngine):
     def __init__(self, dry_run: bool, work_dir: pl.Path, key_name: str, slot: str, pkcs11_obj: str, password: str) -> None:
@@ -386,20 +420,41 @@ class YubikeySsl(SslEngine):
         install_if_none_of_files_exist(dry_run=self.dry_run, files=[file_pkg.entity], package=file_pkg.pkg)
 
         cmd: str = f"sbsign --engine pkcs11 --key '{self.pkcs11_obj}' --cert {self.crt_path} --output {out} {file}"
+
+        if f'{distro.name()}-{distro.version()}' == "Ubuntu-24.04":
+            # sbsign is broken in Ubuntu-24.04, use sbsign from docker (assume it has been built)
+            usb_dev: str = " ".join(f'--device {p}' for p in get_scard_devices_paths(dry_run=False))
+            cmd = f"""
+               docker run -it --rm
+                  --volume {self.crt_path}:{self.crt_path}:ro
+                  --volume {file}:{file}:rw
+                  --volume {out.parent}:{out.parent}:rw
+                  {usb_dev}
+                  dimanne/gpg
+                  {cmd}
+            """
+            # Make it a single clean line (better for logs):
+            cmd = re.sub(r'\s+', ' ', cmd.replace('\n', ' ')).strip()
+            # Need to kill host scdaemon and pcscd, as they claims USB devices and interfere with pcscd in container
+            exec(self.dry_run, "sudo pkill -9 \"(scdaemon|pcscd)\"")
+
         logger.debug(f'{"NOT " if self.dry_run else ""}executing: {cmd}')
         if self.dry_run:
             return
 
         # Curses try #2: https://stackoverflow.com/questions/24946988/using-python-subprocess-call-to-launch-an-ncurses-process
         child = pexpect.spawn(cmd)
+        # child.logfile = OutputLogger() # debugging
+        # child.wait()
         child.expect('Enter engine key pass phrase:')
         child.sendline(self.password)
         child.expect('Enter PKCS#11 key PIN for .* key:')
         child.sendline(self.password)
+        # child.expect(pexpect.EOF)
         child.wait()
         child.close()
         if child.exitstatus != 0:
-            logger.critical(f"Failed to sign {file} with {self.crt_path} and/or save result in {out}")
+            logger.critical(f"Failed to sign {file} with {self.crt_path} and/or save result in {out}. exitstatus: {child.exitstatus}, output: {child.before}")
 
     def verify(self, file: pl.Path):
         FsSsl(self.dry_run, str(self.crt_path.with_suffix(""))).verify(file)
@@ -1094,7 +1149,7 @@ class WrappedYubikeyGpg(WrappedGpg):
         if not self.dry_run:
             write_gpg_conf(self.dry_run, GNUPGHOME)
 
-        cmd: str = f'bash -c "gpg --import {self.pub_key} 2>&1 | grep -oP \'gpg: key \K(.*)(?=: public key )\''
+        cmd: str = f'bash -c "gpg --import {self.pub_key} 2>&1 | grep -oP \'gpg: key \\K(.*)(?=: public key )\''
         res: ExecRes = Gpg.exec_in(dry_run=self.dry_run, in_dir=GNUPGHOME, cmd=cmd)
         if res.is_err():
             logger.critical(f"Failed to import public GPG key from {self.pub_key} and obtain its id: {res}")
@@ -1581,40 +1636,40 @@ class TestEfiStubBootResult(ut.TestCase):
         super().__init__(methodName)
     def test_prev_match(self):
         ok: t.List[str] = [
-            "Boot0000* SecBoot Previous Linux     HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)i.n.i.t.r.d.=.\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)i.n.i.t.r.d.=.\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x80,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2ef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-ac2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-46c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0a0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(X,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux     HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)i.n.i.t.r.d.=.\\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)i.n.i.t.r.d.=.\\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x80,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2ef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-ac2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-46c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0a0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(X,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
             # Same, but with tabs:
-            "Boot0000* SecBoot Previous Linux  \t   HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)i.n.i.t.r.d.=.\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
-            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)i.n.i.t.r.d.=.\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
-            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x80,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2ef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-4e6c-ac2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-46c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0a0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux\t\tHD(1,GT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux\t\tHD(X,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux  \t   HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)i.n.i.t.r.d.=.\\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
+            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)i.n.i.t.r.d.=.\\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
+            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x80,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2ef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-4e6c-ac2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-2041-46c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0aa0f3d5-041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux\t\tHD(1,GPT,0a0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux\t\tHD(1,GT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux\t\tHD(X,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-prev.efi)",
         ]
         not_ok: t.List[str] = [
-            "Boot0000*  SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-prev.efi)",
-            "Boot0000 SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux D(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-20-41-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000,sd)/File(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/Fie(\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\efi\secboot-linux-prev.efi)",
-            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-prevXefi)",
+            "Boot0000*  SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000 SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux D(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-20-41-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000,sd)/File(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/Fie(\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\efi\\secboot-linux-prev.efi)",
+            "Boot0000* SecBoot Previous Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-prevXefi)",
         ]
         for o in ok:
             self.assertTrue(EfiStubBootResult.matches_prev_bootentry(o))
@@ -1622,40 +1677,40 @@ class TestEfiStubBootResult(ut.TestCase):
             self.assertFalse(EfiStubBootResult.matches_prev_bootentry(no))
     def test_latest_match(self):
         ok: t.List[str] = [
-            "Boot0001* SecBoot Latest Linux     HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)i.n.i.t.r.d.=.\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)i.n.i.t.r.d.=.\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x80,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2ef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-ac2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-46c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0a0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(X,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux     HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)i.n.i.t.r.d.=.\\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)i.n.i.t.r.d.=.\\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x80,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2ef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-ac2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-46c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0a0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(X,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
             # Same, but with tabs:
-            "Boot0001* SecBoot Latest Linux   \t  HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)i.n.i.t.r.d.=.\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
-            "Boot0001* SecBoot Latest Linux\tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)i.n.i.t.r.d.=.\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
-            "Boot0001* SecBoot Latest Linux\t HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux \tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x80,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux \t\t HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2ef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux\tHD(1,GPT,0aa0f3d5-2041-4e6c-ac2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux\t\t\tHD(1,GPT,0aa0f3d5-2041-46c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux\tHD(1,GPT,0aa0f3d5-041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux\tHD(1,GPT,0a0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux\tHD(1,GT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux\tHD(X,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux   \t  HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)i.n.i.t.r.d.=.\\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
+            "Boot0001* SecBoot Latest Linux\tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)i.n.i.t.r.d.=.\\.i.n.i.t.r.d...i.m.g. .r.o.o.t.=./.d.e.v./.m.a.p.p.e.r./.v.g.k.u.b.u.n.t.u.-.r.o.o.t. .r.o. .c.o.n.s.o.l.e.=.t.t.y.0. .c.o.n.s.o.l.e.=.t.t.y.S.0.,.3.8.4.0.0.n.8.",
+            "Boot0001* SecBoot Latest Linux\t HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux \tHD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x80,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux \t\t HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2ef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux\tHD(1,GPT,0aa0f3d5-2041-4e6c-ac2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux\t\t\tHD(1,GPT,0aa0f3d5-2041-46c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux\tHD(1,GPT,0aa0f3d5-041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux\tHD(1,GPT,0a0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux\tHD(1,GT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux\tHD(X,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x100000)/File(\\secboot-linux-latest.efi)",
         ]
         not_ok: t.List[str] = [
-            "Boot0001*  SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-latest.efi)",
-            "Boot0001 SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux D(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-20-41-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000,sd)/File(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/Fie(\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\efi\secboot-linux-latest.efi)",
-            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\secboot-linux-latestXefi)",
+            "Boot0001*  SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001 SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux D(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-20-41-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000,sd)/File(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/Fie(\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\efi\\secboot-linux-latest.efi)",
+            "Boot0001* SecBoot Latest Linux HD(1,GPT,0aa0f3d5-2041-4e6c-acf2-b71bb2eef4a0,0x800,0x10000)/File(\\secboot-linux-latestXefi)",
         ]
         for o in ok:
             self.assertTrue(EfiStubBootResult.matches_latest_bootentry(o))
@@ -1680,12 +1735,18 @@ def make_new_efistub_boot(dry_run: bool,
 
         kernel: pl.Path = boot_dir / version.to_string('vmlinuz-')
         initrd: pl.Path = boot_dir / version.to_string('initrd.img-')
+        # sudo objcopy \
+        #   --add-section .osrel="/etc/os-release" --change-section-vma .osrel=0x14e000000 \
+        #   --add-section .cmdline="/proc/cmdline" --change-section-vma .cmdline=0x14e010000 \
+        #   --add-section .linux="/boot/vmlinuz-6.8.0-31-generic" --change-section-vma .linux=0x14e020000 \
+        #   --add-section .initrd="/boot/initrd.img-6.8.0-31-generic" --change-section-vma .initrd=0x14f000000 \
+        #   /usr/lib/systemd/boot/efi/linuxx64.efi.stub ./sb/secboot-linux-latest.efi
         res: ExecRes = ProgPack(ProviderObjcopy).exec(
             dry_run,
-            f'objcopy --add-section .osrel="/etc/os-release" --change-section-vma .osrel=0x20000 '
-            f'        --add-section .cmdline="/proc/cmdline" --change-section-vma .cmdline=0x30000 '
-            f'        --add-section .linux="{kernel}" --change-section-vma .linux=0x40000 '
-            f'        --add-section .initrd="{initrd}" --change-section-vma .initrd=0x3000000 '
+            f'objcopy --add-section .osrel="/etc/os-release" --change-section-vma .osrel=0x14e000000 '
+            f'        --add-section .cmdline="/proc/cmdline" --change-section-vma .cmdline=0x14e010000 '
+            f'        --add-section .linux="{kernel}" --change-section-vma .linux=0x14e020000 '
+            f'        --add-section .initrd="{initrd}" --change-section-vma .initrd=0x14f000000 '
             f'{ProviderEfiStub.linuxx64_efi_stub} {out}')
         if res.is_err():
             logger.critical(f'Failed to create_unified_kernel_from {kernel}, {initrd} and save it to {out}: {res}')
@@ -2029,9 +2090,9 @@ class Qemu:
 
         disk_unlocked: bool = False
         DISK_UNLOCK_STR: str = "Please unlock disk "
-        UEFI_FAILURE_TO_LOAD_SHIM_STR: str = "BdsDxe: failed to load.*\\\\shimx64\.efi: Access Denied"
+        UEFI_FAILURE_TO_LOAD_SHIM_STR: str = "BdsDxe: failed to load.*\\\\shimx64\\.efi: Access Denied"
         UEFI_FAILURE_TO_LOAD_PREV_KERNEL_STR: str = f'BdsDxe: failed to load Boot0000 ' \
-                                                    f'"{EfiStubBootResult.PREV_BOOTMGR_ENTRY}" from HD\\(.*\\)/\\\\secboot-linux-prev\.efi: Access Denied'
+                                                    f'"{EfiStubBootResult.PREV_BOOTMGR_ENTRY}" from HD\\(.*\\)/\\\\secboot-linux-prev\\.efi: Access Denied'
         SHIM_FILURE_TO_LOAD_FRUB_STR: str = "Verification failed: \\(0x1A\\) Security Violation"
         GRUB_FAILURE_TO_LOAD_CFG_STR: str = "\\/grub\\.cfg did not boot the system, rebooting the system in 10 seconds\\.\\.\\."
         out = self.wait_and_exec([("The highlighted entry will be executed automatically in", ''),
@@ -2734,10 +2795,7 @@ def main():
     subparsers = parser.add_subparsers(dest='subparser_name')
 
     # Replace in Python 3.9 with:
-    # parser.add_argument('--run-tests', default=True, action=argparse.BooleanOptionalAction)
-    parser.add_argument('--run-tests', dest='run_tests', action='store_true')
-    parser.add_argument('--no-run-tests', dest='run_tests', action='store_false')
-    parser.set_defaults(run_tests=os.uname()[1].lower() == "Impedance".lower())
+    parser.add_argument('--run-tests', default=os.uname()[1].lower() == "Impedance".lower(), action=argparse.BooleanOptionalAction)
     parser.add_argument("--print-all-providers-info", action='store_true')
 
     # -----------------------------------------------------------------------------------------------
